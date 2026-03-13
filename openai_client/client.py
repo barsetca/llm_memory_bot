@@ -1,9 +1,13 @@
 """OpenAI API client with Structured Outputs."""
 
+import logging
+
 from openai import OpenAI
 
 from config import OPENAI_API_KEY, OPENAI_MODEL
 from openai_client.schemas import DialogResponse
+
+logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT = """Ты — полезный ассистент. Отвечай на запросы пользователя.
@@ -43,11 +47,18 @@ class OpenAIClient:
             {"role": "user", "content": user_content},
         ]
 
-        completion = self._client.chat.completions.parse(
-            model=self._model,
-            messages=messages,
-            response_format=DialogResponse,
-        )
+        try:
+            completion = self._client.chat.completions.parse(
+                model=self._model,
+                messages=messages,
+                response_format=DialogResponse,
+            )
+        except Exception as e:  # noqa: BLE001
+            # Не логируем содержимое запроса, только факт ошибки.
+            logger.exception("Ошибка при обращении к OpenAI (model=%s)", self._model)
+            raise RuntimeError(
+                "Не удалось получить ответ от модели. Попробуйте ещё раз позже."
+            ) from e
 
         msg = completion.choices[0].message
         if getattr(msg, "refusal", None):

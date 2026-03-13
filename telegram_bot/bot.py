@@ -12,7 +12,7 @@ from telegram.ext import (
     filters,
 )
 
-from config import OPENAI_API_KEY, OPENAI_MODEL, TELEGRAM_BOT_TOKEN
+from config import OPENAI_API_KEY, OPENAI_MODEL, TELEGRAM_BOT_TOKEN, get_log_level
 from database import ContextDB
 from openai_client import OpenAIClient
 from telegram_bot.keyboards import (
@@ -22,6 +22,8 @@ from telegram_bot.keyboards import (
     BTN_SHOW_CONTEXT,
     MAIN_MENU_KEYBOARD,
 )
+
+logger = logging.getLogger(__name__)
 
 # Общие зависимости (инициализируются при запуске)
 _db: ContextDB | None = None
@@ -67,7 +69,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Обработка кнопок меню
     if text == BTN_SHOW_CONTEXT:
         uid = _tg_user_id(update)
-        entries = list(_db.get_all_entries(uid)) if _db else []
+        try:
+            entries = list(_db.get_all_entries(uid)) if _db else []
+        except RuntimeError as e:
+            logger.exception("Ошибка чтения контекста для пользователя %s", uid)
+            await update.message.reply_text(
+                f"Не удалось прочитать контекст: {e}",
+                reply_markup=MAIN_MENU_KEYBOARD,
+            )
+            return
         if not entries:
             await update.message.reply_text("Контекст пуст.", reply_markup=MAIN_MENU_KEYBOARD)
             return
@@ -87,7 +97,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if text == BTN_CLEAR_CONTEXT:
         uid = _tg_user_id(update)
         if _db:
-            _db.clear(uid)
+            try:
+                _db.clear(uid)
+            except RuntimeError as e:
+                logger.exception("Ошибка очистки контекста для пользователя %s", uid)
+                await update.message.reply_text(
+                    f"Не удалось очистить контекст: {e}",
+                    reply_markup=MAIN_MENU_KEYBOARD,
+                )
+                return
         await update.message.reply_text("Контекст очищен.", reply_markup=MAIN_MENU_KEYBOARD)
         return
     if text == BTN_MAIN_MENU or text == BTN_CANCEL:
@@ -103,8 +121,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if _client
             else None
         )
-    except Exception as e:
-        await update.message.reply_text(f"Ошибка запроса: {e}", reply_markup=MAIN_MENU_KEYBOARD)
+    except RuntimeError as e:
+        logger.exception("Ошибка при запросе к модели для пользователя %s", uid)
+        await update.message.reply_text(
+            str(e),
+            reply_markup=MAIN_MENU_KEYBOARD,
+        )
+        return
+    except Exception:  # noqa: BLE001
+        logger.exception("Неожиданная ошибка при запросе к модели для пользователя %s", uid)
+        await update.message.reply_text(
+            "Произошла непредвиденная ошибка при обращении к модели. Попробуйте ещё раз позже.",
+            reply_markup=MAIN_MENU_KEYBOARD,
+        )
         return
     if response and _db:
         _db.add_turn(uid, response.user_theses, response.assistant_theses)
@@ -130,8 +159,9 @@ def run_bot() -> None:
         me = await bot.get_me()
         name = me.first_name or me.username or "Бот"
         username = f" (@{me.username})" if me.username else ""
-        print(f"Запуск Telegram-бота: {name}{username}")
-        print(f"Модель: {OPENAI_MODEL}")
+        msg = f"Запуск Telegram-бота: {name}{username} (model={OPENAI_MODEL})"
+        print(msg)
+        logger.info(msg)
 
     try:
         asyncio.run(_print_bot_info())
@@ -139,16 +169,16 @@ def run_bot() -> None:
         # Если цикл уже запущен (маловероятно при run_bot как entrypoint), просто пропускаем
         pass
 
-    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
     logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        level=logging.WARNING,
+        level=get_log_level(logging.INFO),
     )
     # Урезаем подробные логи библиотек, чтобы не светить токен
     logging.getLogger("telegram").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     app.run_polling(allowed_updates=Update.ALL_TYPES)
