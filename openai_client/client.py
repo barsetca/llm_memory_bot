@@ -10,7 +10,19 @@ from openai_client.schemas import DialogResponse
 logger = logging.getLogger(__name__)
 
 
-SYSTEM_PROMPT = """Ты — полезный ассистент. Отвечай на запросы пользователя.
+SYSTEM_PROMPT_BASE = """Ты — полезный ассистент. Отвечай на запросы пользователя.
+
+У тебя всегда есть два источника информации:
+1) текущий запрос пользователя;
+2) исторический контекст диалога (тезисы из прошлых сообщений), если он передан в системном сообщении.
+
+Всегда учитывай исторический контекст:
+- если в контексте есть факты о пользователе (имя, предпочтения и т.п.), считай их актуальными;
+- если пользователь спрашивает о факте, который упоминался ранее (например: "как меня зовут?"), найди его в контексте и ответь согласно найденной информации, а не говори, что не знаешь;
+- если в контексте и текущем запросе есть противоречие, приоритет у более свежей информации из текущего запроса.
+
+Если тебе нужна актуальная информация из внешнего мира (новости, курсы валют, расписания, свежая документация и т.п.), которой может не быть в твоей внутренней памяти,
+обращайся к инструменту web_search, чтобы найти данные в интернете, а затем используй их в своём структурированном ответе.
 
 Твои ответы должны быть в структурированном виде:
 1. user_theses — список тезисов запроса пользователя. Каждый тезис начинай с фраз: "Пользователь спросил ...", "Пользователь уточнил ..." и т.п.
@@ -29,25 +41,28 @@ class OpenAIClient:
     def model(self) -> str:
         return self._model
 
-    def chat(self, user_message: str, context_text: str = "") -> DialogResponse:
+    def chat(self, user_message: str, system_context: str = "") -> DialogResponse:
         """
         Send user message to the model with optional context; return structured response.
         """
-        context_block = ""
-        if context_text.strip():
-            context_block = (
-                "Контекст предыдущего общения (используй для согласованности ответа):\n"
-                f"{context_text}\n\n"
+        system_content = SYSTEM_PROMPT_BASE
+        if system_context.strip():
+            system_content = (
+                SYSTEM_PROMPT_BASE
+                + "\n\nИсторический контекст диалога (для учёта в ответах):\n"
+                + system_context
             )
 
-        user_content = f"{context_block}Сообщение пользователя: {user_message}"
+        user_content = f"Сообщение пользователя: {user_message}"
 
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_content},
             {"role": "user", "content": user_content},
         ]
 
         try:
+            # Примечание: helper .parse сейчас поддерживает только tools типа "function",
+            # поэтому web_search явно не передаём, а лишь инструктируем модель в промпте.
             completion = self._client.chat.completions.parse(
                 model=self._model,
                 messages=messages,

@@ -117,7 +117,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     context_text = _db.get_context_text(uid) if _db else ""
     try:
         response = (
-            await asyncio.to_thread(_client.chat, text, context_text=context_text)
+            await asyncio.to_thread(_client.chat, text, system_context=context_text)
             if _client
             else None
         )

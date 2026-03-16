@@ -73,7 +73,7 @@ def _run_dialog(client: OpenAIClient, db: ContextDB) -> None:
             print(f"Ошибка чтения контекста: {e}\n")
             continue
         try:
-            response = client.chat(line, context_text=context_text)
+            response = client.chat(line, system_context=context_text)
         except RuntimeError as e:
             logger.exception("Ошибка запроса к модели из CLI")
             print(f"{e}\n")
